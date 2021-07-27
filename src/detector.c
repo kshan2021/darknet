@@ -8,6 +8,7 @@
 #include "box.h"
 #include "demo.h"
 #include "option_list.h"
+#include "memory.h"
 
 #ifndef __COMPAR_FN_T
 #define __COMPAR_FN_T
@@ -1605,7 +1606,7 @@ void calc_anchors(char *datacfg, int num_of_clusters, int width, int height, int
 
 
 void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filename, float thresh,
-    float hier_thresh, int dont_show, int ext_output, int save_labels, char *outfile, int letter_box, int benchmark_layers)
+    float hier_thresh, int dont_show, int ext_output, int save_labels, char *outfile, int letter_box, int benchmark_layers, int save_labels_with_confidence)
 {
     list *options = read_data_cfg(datacfg);
     char *name_list = option_find_str(options, "names", "data/names.list");
@@ -1693,6 +1694,11 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
         }
         draw_detections_v3(im, dets, nboxes, thresh, names, alphabet, l.classes, ext_output);
         save_image(im, "predictions");
+        char output[6];
+        memcpy(output, input + 4, 6);
+        char buff[256];
+        sprintf(buff, "%s-predicted", input);
+        save_image(im, buff);
         if (!dont_show) {
             show_image(im, "predictions");
         }
@@ -1729,6 +1735,31 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
                 }
                 if (class_id >= 0) {
                     sprintf(buff, "%d %2.4f %2.4f %2.4f %2.4f\n", class_id, dets[i].bbox.x, dets[i].bbox.y, dets[i].bbox.w, dets[i].bbox.h);
+                    fwrite(buff, sizeof(char), strlen(buff), fw);
+                }
+            }
+            fclose(fw);
+        }
+
+        if (save_labels_with_confidence)
+        {
+            char labelpath[4096];
+            replace_image_to_label(input, labelpath);
+
+            FILE* fw = fopen(labelpath, "wb");
+            int i;
+            for (i = 0; i < nboxes; ++i) {
+                char buff[1024];
+                int class_id = -1;
+                float prob = 0;
+                for (j = 0; j < l.classes; ++j) {
+                    if (dets[i].prob[j] > thresh && dets[i].prob[j] > prob) {
+                        prob = dets[i].prob[j];
+                        class_id = j;
+                    }
+                }
+                if (class_id >= 0) {
+                    sprintf(buff, "%d %2.4f %2.4f %2.4f %2.4f %2.4f\n", class_id, prob, dets[i].bbox.x, dets[i].bbox.y, dets[i].bbox.w, dets[i].bbox.h);
                     fwrite(buff, sizeof(char), strlen(buff), fw);
                 }
             }
@@ -1978,6 +2009,7 @@ void run_detector(int argc, char **argv)
     // and for recall mode (extended output table-like format with results for best_class fit)
     int ext_output = find_arg(argc, argv, "-ext_output");
     int save_labels = find_arg(argc, argv, "-save_labels");
+    int save_labels_with_confidence = find_arg(argc, argv, "-save_labels_with_confidence");
     char* chart_path = find_char_arg(argc, argv, "-chart", 0);
     if (argc < 4) {
         fprintf(stderr, "usage: %s %s [train/test/valid/demo/map] [data] [cfg] [weights (optional)]\n", argv[0], argv[1]);
@@ -2016,7 +2048,7 @@ void run_detector(int argc, char **argv)
         if (strlen(weights) > 0)
             if (weights[strlen(weights) - 1] == 0x0d) weights[strlen(weights) - 1] = 0;
     char *filename = (argc > 6) ? argv[6] : 0;
-    if (0 == strcmp(argv[2], "test")) test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers);
+    if (0 == strcmp(argv[2], "test")) test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
     else if (0 == strcmp(argv[2], "train")) train_detector(datacfg, cfg, weights, gpus, ngpus, clear, dont_show, calc_map, thresh, iou_thresh, mjpeg_port, show_imgs, benchmark_layers, chart_path);
     else if (0 == strcmp(argv[2], "valid")) validate_detector(datacfg, cfg, weights, outfile);
     else if (0 == strcmp(argv[2], "recall")) validate_detector_recall(datacfg, cfg, weights);
@@ -2035,7 +2067,7 @@ void run_detector(int argc, char **argv)
             if (strlen(filename) > 0)
                 if (filename[strlen(filename) - 1] == 0x0d) filename[strlen(filename) - 1] = 0;
         demo(cfg, weights, thresh, hier_thresh, cam_index, filename, names, classes, avgframes, frame_skip, prefix, out_filename,
-            mjpeg_port, dontdraw_bbox, json_port, dont_show, ext_output, letter_box, time_limit_sec, http_post_host, benchmark, benchmark_layers);
+            mjpeg_port, dontdraw_bbox, json_port, dont_show, ext_output, letter_box, time_limit_sec, http_post_host, benchmark, benchmark_layers, outfile);
 
         free_list_contents_kvp(options);
         free_list(options);

@@ -142,8 +142,21 @@ double get_wall_time()
 
 void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int cam_index, const char *filename, char **names, int classes, int avgframes,
     int frame_skip, char *prefix, char *out_filename, int mjpeg_port, int dontdraw_bbox, int json_port, int dont_show, int ext_output, int letter_box_in, int time_limit_sec, char *http_post_host,
-    int benchmark, int benchmark_layers)
+    int benchmark, int benchmark_layers, char *outfile)
 {
+    char buff[256];
+    char *input = buff;
+    char *json_buf = NULL;
+    int json_image_id = 0;
+    FILE* json_file = NULL;
+    if (outfile) {
+        json_file = fopen(outfile, "wb");
+        if(!json_file) {
+        error("fopen failed", DARKNET_LOC);
+        }
+        char *tmp = "[\n";
+        fwrite(tmp, sizeof(char), strlen(tmp), json_file);
+    }
     if (avgframes < 1) avgframes = 1;
     avg_frames = avgframes;
     letter_box = letter_box_in;
@@ -277,7 +290,17 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
                 if (l.nms_kind == DEFAULT_NMS) do_nms_sort(local_dets, local_nboxes, l.classes, nms);
                 else diounms_sort(local_dets, local_nboxes, l.classes, nms, l.nms_kind, l.beta_nms);
             }
+            if (json_file) {
+                if (json_buf) {
+                    char *tmp = ", \n";
+                    fwrite(tmp, sizeof(char), strlen(tmp), json_file);
+                }
+                ++json_image_id;
+                json_buf = detection_to_json(dets, nboxes, l.classes, names, json_image_id, input);
 
+                fwrite(json_buf, sizeof(char), strlen(json_buf), json_file);
+                free(json_buf);
+            }
             if (l.embedding_size) set_track_id(local_dets, local_nboxes, demo_thresh, l.sim_thresh, l.track_ciou_norm, l.track_history_size, l.dets_for_track, l.dets_for_show);
 
             //printf("\033[2J");
@@ -428,7 +451,7 @@ void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int 
 #else
 void demo(char *cfgfile, char *weightfile, float thresh, float hier_thresh, int cam_index, const char *filename, char **names, int classes, int avgframes,
     int frame_skip, char *prefix, char *out_filename, int mjpeg_port, int dontdraw_bbox, int json_port, int dont_show, int ext_output, int letter_box_in, int time_limit_sec, char *http_post_host,
-    int benchmark, int benchmark_layers)
+    int benchmark, int benchmark_layers, char *outfile)
 {
     fprintf(stderr, "Demo needs OpenCV for webcam images.\n");
 }

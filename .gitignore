@@ -28,6 +28,7 @@ ninja.zip
 vcpkg_installed/
 !build/darknet/YoloWrapper.cs
 .fuse*
+weights/
 *.weights
 build/*.cmake
 build/*.ninja
@@ -41,6 +42,9 @@ build/Makefile
 */vcpkg-manifest-install.log
 build.log
 __pycache__/
+imagelist.txt
+pictures/
+bad.list
 
 # OS Generated #
 .DS_Store*
@@ -64,3 +68,4 @@ uselib
 uselib_track
 darknet
 vcpkg/
+
