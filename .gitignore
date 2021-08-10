@@ -42,9 +42,15 @@ build/Makefile
 */vcpkg-manifest-install.log
 build.log
 __pycache__/
-imagelist.txt
-pictures/
 bad.list
+
+frames/
+frames1/
+inputframes/
+outputframes/
+imagelist.txt
+imagelist/
+pictures/
 
 # OS Generated #
 .DS_Store*

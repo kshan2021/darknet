@@ -10,6 +10,12 @@
 #include "option_list.h"
 #include "memory.h"
 
+#include <sys/types.h>
+#include <sys/param.h>
+#include <dirent.h>
+#include <stdio.h>
+#include <string.h>
+
 #ifndef __COMPAR_FN_T
 #define __COMPAR_FN_T
 typedef int (*__compar_fn_t)(const void*, const void*);
@@ -1645,9 +1651,15 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
     float nms = .45;    // 0.4F
     while (1) {
         if (filename) {
-            strncpy(input, filename, 256);
-            if (strlen(input) > 0)
-                if (input[strlen(input) - 1] == 0x0d) input[strlen(input) - 1] = 0;
+            // Check if filename contains newline character
+            if(strchr(filename,'\n') != NULL){
+                // Do a thing for multiple filenames
+            }
+            else{
+                strncpy(input, filename, 256);
+                if (strlen(input) > 0)
+                    if (input[strlen(input) - 1] == 0x0d) input[strlen(input) - 1] = 0;
+            }
         }
         else {
             printf("Enter Image Path: ");
@@ -1692,12 +1704,20 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
             if (l.nms_kind == DEFAULT_NMS) do_nms_sort(dets, nboxes, l.classes, nms);
             else diounms_sort(dets, nboxes, l.classes, nms, l.nms_kind, l.beta_nms);
         }
+        //
         draw_detections_v3(im, dets, nboxes, thresh, names, alphabet, l.classes, ext_output);
-        save_image(im, "predictions");
+        
+        // Disable native suggestion of saving file as "predictions.jpg" as this will be over-written for multiple files
+        //save_image(im, "predictions");
+        
         char output[6];
+        // Copy 6 bytes from input+4 to output
         memcpy(output, input + 4, 6);
-        char buff[256];
+
+        // Create temporary string "buff" which will store the new file-name and path
+        char buff[1024];
         sprintf(buff, "%s-predicted", input);
+        
         save_image(im, buff);
         if (!dont_show) {
             show_image(im, "predictions");
@@ -1975,6 +1995,89 @@ void draw_object(char *datacfg, char *cfgfile, char *weightfile, char *filename,
 }
 #endif // defined(OPENCV) && defined(GPU)
 
+const char *FileSuffix(const char path[])
+{
+    const char *result;
+    int i, n;
+    if (path == NULL){
+        char *returnval = "NO_PATH";
+        return returnval;
+    }
+    else{
+        assert(path != NULL);
+        n = strlen(path);
+        i = n - 1;
+        while ((i >= 0) && (path[i] != '.') && (path[i] != '/') & (path[i] != '\\')) {
+            i--;
+        }
+        if ((i > 0) && (path[i] == '.') && (path[i - 1] != '/') && (path[i - 1] != '\\')) {
+            result = path + i;
+        } else {
+            result = path + n;
+        }
+        return result;
+    }
+}
+
+static int listDir_helper(char *path, char *datacfg, char *cfgfile, char *weightfile, char *filename, float thresh, float hier_thresh, int dont_show, int ext_output, int save_labels, char *outfile, int letter_box, int benchmark_layers, int save_labels_with_confidence) {
+  char slash = '/';  // or maybe slash = '\\'
+  DIR* dir;
+  struct dirent *ent;
+  char *NulPosition = &path[strlen(path)];
+  if ((dir = opendir(path)) != NULL) {
+
+    while ((ent = readdir(dir)) != NULL) {
+      printf("Processing %s%c%s\n", path, slash, ent->d_name);
+      if (ent->d_type == DT_DIR) {
+        printf("DIRECTORY %s\n",ent->d_name);
+        if ((strcmp(ent->d_name, ".") != 0) && (strcmp(ent->d_name, "..") != 0)) {
+          sprintf(NulPosition, "%c%s", slash, ent->d_name);
+          if (listDir_helper(path, datacfg, cfgfile, weightfile, filename, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence)) {
+            closedir(dir);
+            return 1;
+          }
+          *NulPosition = '\0';
+        }
+      }
+      else{
+          // is a file; check if extension is what we want
+          char *ext = strrchr(FileSuffix(ent->d_name),'.');
+          if (0 == strcmp(ext+1, "jpg")){
+              printf("Running %s\n",ent->d_name);
+              int bufferlength = strlen(path)+strlen(ent->d_name)+2;
+              printf("Allocating %i bytes to buffer\n",bufferlength);
+              char *buffer = malloc(strlen(path)+strlen(ent->d_name)+2);
+              strcpy(buffer,path);
+              printf("1 %s\n",buffer);
+              strcat(buffer,&slash);
+              printf("2 %s\n",buffer);
+              strcat(buffer,ent->d_name);
+              printf("Total path %s\n",buffer);
+              test_detector(datacfg, cfgfile, weightfile, buffer, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
+              free(buffer);
+          }
+          else{
+              printf("Invalid file %s\n",ent->d_name);
+          }
+      }
+    }
+
+  }
+  closedir(dir);
+  return 0;
+}
+
+int test_detector_folder(const char* path, char *datacfg, char *cfgfile, char *weightfile, float thresh, float hier_thresh, int dont_show, int ext_output, int save_labels, char *outfile, int letter_box, int benchmark_layers, int save_labels_with_confidence){
+  struct dirent *ent;
+  char pathmax[MAXPATHLEN+1+sizeof(ent->d_name)+1];
+  if (strlen(path) > MAXPATHLEN) {
+    return 1;
+  }
+  strcpy(pathmax, path);
+  return listDir_helper(pathmax, datacfg, cfgfile, weightfile, path, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
+}
+
+
 void run_detector(int argc, char **argv)
 {
     int dont_show = find_arg(argc, argv, "-dont_show");
@@ -2048,7 +2151,26 @@ void run_detector(int argc, char **argv)
         if (strlen(weights) > 0)
             if (weights[strlen(weights) - 1] == 0x0d) weights[strlen(weights) - 1] = 0;
     char *filename = (argc > 6) ? argv[6] : 0;
-    if (0 == strcmp(argv[2], "test")) test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
+
+
+    if (0 == strcmp(argv[2], "test")){
+        if (!filename){
+            printf("No provided filepath/name \n");
+            test_detector(datacfg, cfg, weights, NULL, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
+        }
+        else{
+            char *ext = strrchr(FileSuffix(filename),'.');
+            if (!ext){
+                //Assume have been given a folder
+                printf("Processing all files in folder %s\n",filename);
+                test_detector_folder(filename,datacfg, cfg, weights, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
+                return 0;
+            } else{
+                printf("Processing file %s with extension %s\n",filename,ext + 1);
+                test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
+            }
+        }
+    }
     else if (0 == strcmp(argv[2], "train")) train_detector(datacfg, cfg, weights, gpus, ngpus, clear, dont_show, calc_map, thresh, iou_thresh, mjpeg_port, show_imgs, benchmark_layers, chart_path);
     else if (0 == strcmp(argv[2], "valid")) validate_detector(datacfg, cfg, weights, outfile);
     else if (0 == strcmp(argv[2], "recall")) validate_detector_recall(datacfg, cfg, weights);
