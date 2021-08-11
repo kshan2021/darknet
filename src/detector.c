@@ -1610,6 +1610,53 @@ void calc_anchors(char *datacfg, int num_of_clusters, int width, int height, int
     getchar();
 }
 
+// remove_ext: removes the "extension" from a file spec.
+//   myStr is the string to process.
+//   extSep is the extension separator.
+//   pathSep is the path separator (0 means to ignore).
+// Returns an allocated string identical to the original but
+//   with the extension removed. It must be freed when you're
+//   finished with it.
+// If you pass in NULL or the new string can't be allocated,
+//   it returns NULL.
+
+char *remove_ext (char* myStr, char extSep, char pathSep) {
+    char *retStr, *lastExt, *lastPath;
+
+    // Error checks and allocate string.
+
+    if (myStr == NULL) return NULL;
+    if ((retStr = malloc (strlen (myStr) + 1)) == NULL) return NULL;
+
+    // Make a copy and find the relevant characters.
+
+    strcpy (retStr, myStr);
+    lastExt = strrchr (retStr, extSep);
+    lastPath = (pathSep == 0) ? NULL : strrchr (retStr, pathSep);
+
+    // If it has an extension separator.
+
+    if (lastExt != NULL) {
+        // and it's to the right of the path separator.
+
+        if (lastPath != NULL) {
+            if (lastPath < lastExt) {
+                // then remove it.
+
+                *lastExt = '\0';
+            }
+        } else {
+            // Has extension separator with no path separator.
+
+            *lastExt = '\0';
+        }
+    }
+
+    // Return the modified string.
+
+    return retStr;
+}
+
 
 void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filename, float thresh,
     float hier_thresh, int dont_show, int ext_output, int save_labels, char *outfile, int letter_box, int benchmark_layers, int save_labels_with_confidence)
@@ -1649,25 +1696,47 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
     }
     int j;
     float nms = .45;    // 0.4F
+
+    input = NULL;
     while (1) {
+        bool exitloop;
+        bool loopdaloop;
         if (filename) {
             // Check if filename contains newline character
-            if(strchr(filename,'\n') != NULL){
-                // Do a thing for multiple filenames
+            //char newline = '\n';
+            if((loopdaloop == 1)||(strchr(filename,'\n') != NULL)){
+                loopdaloop = 1;
+                if (!input){
+                    input = strtok(filename,"\n");
+                }
+                else{
+                    input = strtok(NULL,"\n");
+                }
+                if (!input){
+                    break;
+                }
+                else{
+                    exitloop = NULL;
+                }
             }
             else{
+                printf("1675 single filename detected: %s\n",filename);
+                input = buff;
+                exitloop = 1;
                 strncpy(input, filename, 256);
                 if (strlen(input) > 0)
                     if (input[strlen(input) - 1] == 0x0d) input[strlen(input) - 1] = 0;
             }
         }
         else {
+            input = buff;
             printf("Enter Image Path: ");
             fflush(stdout);
             input = fgets(input, 256, stdin);
             if (!input) break;
             strtok(input, "\n");
         }
+
         //image im;
         //image sized = load_image_resize(input, net.w, net.h, net.c, &im);
         image im = load_image(input, 0, 0, net.c);
@@ -1716,7 +1785,14 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
 
         // Create temporary string "buff" which will store the new file-name and path
         char buff[1024];
-        sprintf(buff, "%s-predicted", input);
+
+        // In future create flag to determine whether to overwrite original images or not
+
+        //Add additional annotated image with suffix -predicted
+        //sprintf(buff, "%s-predicted", input);
+
+        //Overwrite original image 
+        sprintf(buff, "%s", remove_ext(input,'.','/'));
         
         save_image(im, buff);
         if (!dont_show) {
@@ -1795,7 +1871,7 @@ void test_detector(char *datacfg, char *cfgfile, char *weightfile, char *filenam
             destroy_all_windows_cv();
         }
 
-        if (filename) break;
+        if (exitloop) break;
     }
 
     if (json_file) {
@@ -2019,22 +2095,34 @@ const char *FileSuffix(const char path[])
     }
 }
 
-static int listDir_helper(char *path, char *datacfg, char *cfgfile, char *weightfile, char *filename, float thresh, float hier_thresh, int dont_show, int ext_output, int save_labels, char *outfile, int letter_box, int benchmark_layers, int save_labels_with_confidence) {
+char *strremove(char *str, const char *sub) {
+    size_t len = strlen(sub);
+    if (len > 0) {
+        char *p = str;
+        while ((p = strstr(p, sub)) != NULL) {
+            memmove(p, p + len, strlen(p + len) + 1);
+        }
+    }
+    return str;
+}
+
+static char* listDir_helper(char *path) {
   char slash = '/';  // or maybe slash = '\\'
   DIR* dir;
+  static char *totalfilelist = NULL;
   struct dirent *ent;
   char *NulPosition = &path[strlen(path)];
   if ((dir = opendir(path)) != NULL) {
 
     while ((ent = readdir(dir)) != NULL) {
-      printf("Processing %s%c%s\n", path, slash, ent->d_name);
+    //   printf("Processing %s%c%s\n", path, slash, ent->d_name);
       if (ent->d_type == DT_DIR) {
-        printf("DIRECTORY %s\n",ent->d_name);
+        // printf("DIRECTORY %s\n",ent->d_name);
         if ((strcmp(ent->d_name, ".") != 0) && (strcmp(ent->d_name, "..") != 0)) {
           sprintf(NulPosition, "%c%s", slash, ent->d_name);
-          if (listDir_helper(path, datacfg, cfgfile, weightfile, filename, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence)) {
+          if (listDir_helper(path) == "dir") {
             closedir(dir);
-            return 1;
+            return "dir";
           }
           *NulPosition = '\0';
         }
@@ -2043,17 +2131,41 @@ static int listDir_helper(char *path, char *datacfg, char *cfgfile, char *weight
           // is a file; check if extension is what we want
           char *ext = strrchr(FileSuffix(ent->d_name),'.');
           if (0 == strcmp(ext+1, "jpg")){
-              printf("Running %s\n",ent->d_name);
+            //   printf("Running %s\n",ent->d_name);
               int bufferlength = strlen(path)+strlen(ent->d_name)+2;
-              printf("Allocating %i bytes to buffer\n",bufferlength);
+            //   printf("Allocating %i bytes to buffer\n",bufferlength);
               char *buffer = malloc(strlen(path)+strlen(ent->d_name)+2);
               strcpy(buffer,path);
-              printf("1 %s\n",buffer);
+            //   printf("1 %s\n",buffer);
               strcat(buffer,&slash);
-              printf("2 %s\n",buffer);
+            //   printf("2 %s\n",buffer);
               strcat(buffer,ent->d_name);
-              printf("Total path %s\n",buffer);
-              test_detector(datacfg, cfgfile, weightfile, buffer, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
+            //   printf("Total path %s\n",buffer);
+
+              // Remove weird newline character that seems to sneak in between "slash" and "ent->d_name"
+                int i;
+                for(i = 0;i < strlen(buffer); i++) {
+                    if(buffer[i] == '\n') {
+                        memmove(&buffer[i],&buffer[i+1],strlen(buffer) - i);
+                    }
+                }
+
+              if (!totalfilelist){
+                  totalfilelist = malloc(strlen(buffer)+2);
+                //   printf("3a %s\n",buffer);
+                  strcpy(totalfilelist,buffer);
+                  char newline = '\n';
+                  strcat(totalfilelist,&newline);
+              }
+              else{
+                
+                totalfilelist = realloc(totalfilelist,strlen(totalfilelist)+strlen(buffer)+2);
+                // printf("3b %s\n",buffer);
+                strcat(totalfilelist,buffer);
+                char newline = '\n';
+                strcat(totalfilelist,&newline);
+              }
+            //   printf("\n\n====TOTALFILELIST====\n%s\n\n",totalfilelist);
               free(buffer);
           }
           else{
@@ -2064,17 +2176,18 @@ static int listDir_helper(char *path, char *datacfg, char *cfgfile, char *weight
 
   }
   closedir(dir);
-  return 0;
+  return totalfilelist;
+  //return 0;
 }
 
-int test_detector_folder(const char* path, char *datacfg, char *cfgfile, char *weightfile, float thresh, float hier_thresh, int dont_show, int ext_output, int save_labels, char *outfile, int letter_box, int benchmark_layers, int save_labels_with_confidence){
+char* test_detector_folder(const char* path){
   struct dirent *ent;
   char pathmax[MAXPATHLEN+1+sizeof(ent->d_name)+1];
   if (strlen(path) > MAXPATHLEN) {
     return 1;
   }
   strcpy(pathmax, path);
-  return listDir_helper(pathmax, datacfg, cfgfile, weightfile, path, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
+  return listDir_helper(pathmax);
 }
 
 
@@ -2163,8 +2276,9 @@ void run_detector(int argc, char **argv)
             if (!ext){
                 //Assume have been given a folder
                 printf("Processing all files in folder %s\n",filename);
-                test_detector_folder(filename,datacfg, cfg, weights, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
-                return 0;
+                char *totalfilelist = test_detector_folder(filename);
+                // printf("Printing le thing %s\n",totalfilelist);
+                test_detector(datacfg, cfg, weights, totalfilelist, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
             } else{
                 printf("Processing file %s with extension %s\n",filename,ext + 1);
                 test_detector(datacfg, cfg, weights, filename, thresh, hier_thresh, dont_show, ext_output, save_labels, outfile, letter_box, benchmark_layers, save_labels_with_confidence);
