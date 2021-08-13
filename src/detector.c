@@ -1343,7 +1343,9 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
         float class_recall = (float)tp_for_thresh_per_class[i] / ((float)tp_for_thresh_per_class[i] + (float)(truth_classes_count[i] - tp_for_thresh_per_class[i]));
         //printf("Precision = %1.2f, Recall = %1.2f, avg IOU = %2.2f%% \n\n", class_precision, class_recall, avg_iou_per_class[i]);
 
-        mean_average_precision += avg_precision;
+        // Modify mAP so that it is weighted by the number of objects per class, rather than just assuming all classes are equal
+        // mean_average_precision += avg_precision;
+        mean_average_precision += avg_precision * truth_classes_count[i];
     }
 
     const float cur_precision = (float)tp_for_thresh / ((float)tp_for_thresh + (float)fp_for_thresh);
@@ -1355,7 +1357,10 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     printf(" for conf_thresh = %0.2f, TP = %d, FP = %d, FN = %d, average IoU = %2.2f %% \n",
         thresh_calc_avg_iou, tp_for_thresh, fp_for_thresh, unique_truth_count - tp_for_thresh, avg_iou * 100);
 
-    mean_average_precision = mean_average_precision / classes;
+    // Modify mAP so that it is weighted by the number of objects per class, rather than just assuming all classes are equal
+    // mean_average_precision = mean_average_precision / classes;
+    mean_average_precision = mean_average_precision / unique_truth_count;
+
     printf("\n IoU threshold = %2.0f %%, ", iou_thresh * 100);
     if (map_points) printf("used %d Recall-points \n", map_points);
     else printf("used Area-Under-Curve for each unique Recall \n");
