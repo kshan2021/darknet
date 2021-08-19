@@ -30,6 +30,12 @@ int check_mistakes = 0;
 
 static int coco_ids[] = { 1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,31,32,33,34,35,36,37,38,39,40,41,42,43,44,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,67,70,72,73,74,75,76,77,78,79,80,81,82,84,85,86,87,88,89,90 };
 
+struct average_precision_struct
+{
+    float mAP_weighted, mAP_unweighted;
+    float AP_perclass[90];
+};
+
 void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, int ngpus, int clear, int dont_show, int calc_map, float thresh, float iou_thresh, int mjpeg_port, int show_imgs, int benchmark_layers, char* chart_path)
 {
     list *options = read_data_cfg(datacfg);
@@ -133,6 +139,8 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     iter_map = get_current_iteration(net);
     float mean_average_precision = -1;
     float best_map = mean_average_precision;
+
+    struct average_precision_struct bestAPscore;
 
     load_args args = { 0 };
     args.w = net.w;
@@ -310,6 +318,8 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
         int next_map_calc = iter_map + calc_map_for_each;
         next_map_calc = fmax(next_map_calc, net.burn_in);
         //next_map_calc = fmax(next_map_calc, 400);
+        next_map_calc = iteration;
+
         if (calc_map) {
             printf("\n (next mAP calculation at %d iterations) ", next_map_calc);
             if (mean_average_precision > 0) printf("\n Last accuracy mAP@%0.2f = %2.2f %%, best = %2.2f %% ", iou_thresh, mean_average_precision * 100, best_map * 100);
@@ -360,7 +370,11 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
             //network net_combined = combine_train_valid_networks(net, net_map);
 
             iter_map = iteration;
-            mean_average_precision = validate_detector_map(datacfg, cfgfile, weightfile, thresh, iou_thresh, 0, net.letter_box, &net_map);// &net_combined);
+            //mean_average_precision = validate_detector_map(datacfg, cfgfile, weightfile, thresh, iou_thresh, 0, net.letter_box, &net_map);// &net_combined);
+            struct average_precision_struct apresults = validate_detector_map(datacfg, cfgfile, weightfile, thresh, iou_thresh, 0, net.letter_box, &net_map);// &net_combined);
+
+            mean_average_precision = apresults.mAP_weighted;
+
             printf("\n mean_average_precision (mAP@%0.2f) = %f \n", iou_thresh, mean_average_precision);
             if (mean_average_precision > best_map) {
                 best_map = mean_average_precision;
@@ -368,6 +382,33 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
                 char buff[256];
                 sprintf(buff, "%s/%s_best.weights", backup_directory, base);
                 save_weights(net, buff);
+            }
+
+            if (apresults.mAP_weighted > bestAPscore.mAP_weighted){
+                bestAPscore.mAP_weighted = apresults.mAP_weighted;
+                printf("New best weighted mAP!\n");
+                char buff[256];
+                sprintf(buff, "%s/%s-weighted_best.weights", backup_directory, base);
+                save_weights(net, buff);
+            }
+
+            if (apresults.mAP_weighted > bestAPscore.mAP_weighted){
+                bestAPscore.mAP_unweighted = apresults.mAP_unweighted;
+                printf("New best unweighted mAP!\n");
+                char buff[256];
+                sprintf(buff, "%s/%s-unweighted_best.weights", backup_directory, base);
+                save_weights(net, buff);
+            }
+
+            int i;
+            for (i=0;i<90;++i){
+                if ((apresults.AP_perclass[i] > bestAPscore.AP_perclass[i])&&(apresults.AP_perclass[i] <= 1)&&(apresults.AP_perclass[i] > 0)){
+                    bestAPscore.AP_perclass[i] = apresults.AP_perclass[i];
+                    printf("New best AP for class %i of %.2f over %.2f!\n",i,apresults.AP_perclass[i], bestAPscore.AP_perclass[i]);
+                    char buff[256];
+                    sprintf(buff, "%s/%s-class%i_best.weights", backup_directory, base,i);
+                    save_weights(net, buff);
+                }
             }
 
             draw_precision = 1;
@@ -390,7 +431,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
         //if (i % 1000 == 0 || (i < 1000 && i % 100 == 0)) {
         //if (i % 100 == 0) {
         if ((iteration >= (iter_save + 10000) || iteration % 10000 == 0) ||
-            (iteration >= (iter_save + 1000) || iteration % 1000 == 0) && net.max_batches < 10000)
+            (iteration >= (iter_save + 1000) || iteration % 1000 == 0))
         {
             iter_save = iteration;
 #ifdef GPU
@@ -934,7 +975,7 @@ int detections_comparator(const void *pa, const void *pb)
     return 0;
 }
 
-float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, float thresh_calc_avg_iou, const float iou_thresh, const int map_points, int letter_box, network *existing_net)
+struct average_precision_struct validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, float thresh_calc_avg_iou, const float iou_thresh, const int map_points, int letter_box, network *existing_net)
 {
     int j;
     list *options = read_data_cfg(datacfg);
@@ -947,6 +988,13 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     //int *map = 0;
     //if (mapf) map = read_map(mapf);
     FILE* reinforcement_fd = NULL;
+
+    struct average_precision_struct apstruct;
+
+    // int i;
+    // for (i=0;i<=90;++i){
+    //     apstruct.AP_perclass[i] = 0;
+    // }
 
     network net;
     //int initial_batch;
@@ -1283,6 +1331,7 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
 
 
     double mean_average_precision = 0;
+    double mean_average_precision_unweighted = 0;
 
     for (i = 0; i < classes; ++i) {
         double avg_precision = 0;
@@ -1338,6 +1387,8 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
 
         printf("class_id = %d, name = %s, ap = %2.2f%%   \t (TP = %d, FP = %d) \n",
             i, names[i], avg_precision * 100, tp_for_thresh_per_class[i], fp_for_thresh_per_class[i]);
+        
+        apstruct.AP_perclass[i] = (float)avg_precision;
 
         float class_precision = (float)tp_for_thresh_per_class[i] / ((float)tp_for_thresh_per_class[i] + (float)fp_for_thresh_per_class[i]);
         float class_recall = (float)tp_for_thresh_per_class[i] / ((float)tp_for_thresh_per_class[i] + (float)(truth_classes_count[i] - tp_for_thresh_per_class[i]));
@@ -1357,8 +1408,8 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     printf(" for conf_thresh = %0.2f, TP = %d, FP = %d, FN = %d, average IoU = %2.2f %% \n",
         thresh_calc_avg_iou, tp_for_thresh, fp_for_thresh, unique_truth_count - tp_for_thresh, avg_iou * 100);
 
+    mean_average_precision_unweighted = mean_average_precision / classes;
     // Modify mAP so that it is weighted by the number of objects per class, rather than just assuming all classes are equal
-    // mean_average_precision = mean_average_precision / classes;
     mean_average_precision = mean_average_precision / unique_truth_count;
 
     printf("\n IoU threshold = %2.0f %%, ", iou_thresh * 100);
@@ -1366,6 +1417,9 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     else printf("used Area-Under-Curve for each unique Recall \n");
 
     printf(" mean average precision (mAP@%0.2f) = %f, or %2.2f %% \n", iou_thresh, mean_average_precision, mean_average_precision * 100);
+
+    apstruct.mAP_weighted = mean_average_precision;
+    apstruct.mAP_unweighted = mean_average_precision_unweighted;
 
     for (i = 0; i < classes; ++i) {
         free(pr[i]);
@@ -1406,7 +1460,7 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     if (buf) free(buf);
     if (buf_resized) free(buf_resized);
 
-    return mean_average_precision;
+    return apstruct;
 }
 
 typedef struct {
