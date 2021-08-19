@@ -142,6 +142,11 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
 
     struct average_precision_struct bestAPscore;
 
+    int counter;
+    for (counter=0;counter<=90;counter++){
+        bestAPscore.AP_perclass[counter] = 0;
+    }
+
     load_args args = { 0 };
     args.w = net.w;
     args.h = net.h;
@@ -318,7 +323,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
         int next_map_calc = iter_map + calc_map_for_each;
         next_map_calc = fmax(next_map_calc, net.burn_in);
         //next_map_calc = fmax(next_map_calc, 400);
-        next_map_calc = iteration;
+        //next_map_calc = iteration;
 
         if (calc_map) {
             printf("\n (next mAP calculation at %d iterations) ", next_map_calc);
@@ -385,16 +390,16 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
             }
 
             if (apresults.mAP_weighted > bestAPscore.mAP_weighted){
+                printf("New best weighted mAP of %.4f over %.4f!\n",apresults.mAP_weighted,bestAPscore.mAP_weighted);
                 bestAPscore.mAP_weighted = apresults.mAP_weighted;
-                printf("New best weighted mAP!\n");
                 char buff[256];
                 sprintf(buff, "%s/%s-weighted_best.weights", backup_directory, base);
                 save_weights(net, buff);
             }
 
-            if (apresults.mAP_weighted > bestAPscore.mAP_weighted){
+            if (apresults.mAP_unweighted > bestAPscore.mAP_unweighted){
+                printf("New best unweighted mAP of %f over %f!\n",apresults.mAP_unweighted,bestAPscore.mAP_unweighted);
                 bestAPscore.mAP_unweighted = apresults.mAP_unweighted;
-                printf("New best unweighted mAP!\n");
                 char buff[256];
                 sprintf(buff, "%s/%s-unweighted_best.weights", backup_directory, base);
                 save_weights(net, buff);
@@ -402,14 +407,50 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
 
             int i;
             for (i=0;i<90;++i){
-                if ((apresults.AP_perclass[i] > bestAPscore.AP_perclass[i])&&(apresults.AP_perclass[i] <= 1)&&(apresults.AP_perclass[i] > 0)){
+
+                if ((bestAPscore.AP_perclass[i] > 1)||(bestAPscore.AP_perclass[i] < 0)){
+                    printf("Invalid bestAPscore for class %i of %f. Resetting to 0\n",i,bestAPscore.AP_perclass[i]);
+                    bestAPscore.AP_perclass[i] = 0;
+                }
+                
+                if(apresults.AP_perclass[i] > bestAPscore.AP_perclass[i]){
+                    printf("+ New best AP for class %i of %f over %f!\n",i,apresults.AP_perclass[i], bestAPscore.AP_perclass[i]);
                     bestAPscore.AP_perclass[i] = apresults.AP_perclass[i];
-                    printf("New best AP for class %i of %.2f over %.2f!\n",i,apresults.AP_perclass[i], bestAPscore.AP_perclass[i]);
                     char buff[256];
                     sprintf(buff, "%s/%s-class%i_best.weights", backup_directory, base,i);
                     save_weights(net, buff);
                 }
+                else{
+                    printf("- No improvement for class %i of %f over %f.\n",i,apresults.AP_perclass[i], bestAPscore.AP_perclass[i]);
+                }
             }
+
+            float zero = 0;
+
+            char apPerClassBuff[512];
+            strcpy(apPerClassBuff,"");
+            char apPerClassString[64];
+            for (i=0;i<90;++i){
+                if ((apresults.AP_perclass[i] <= 1)&&(apresults.AP_perclass[i] >= 0)){
+                    sprintf(apPerClassString,"%f",apresults.AP_perclass[i]);
+                }
+                else{
+                    sprintf(apPerClassString,"%f",zero);
+                }
+                strcat(apPerClassBuff,", ");
+                strcat(apPerClassBuff,apPerClassString);
+            }
+
+            FILE* csvoutput;
+
+            char csvfilename[256];
+            sprintf(csvfilename,"%s/trainingdata-%s.csv",backup_directory,base);
+
+            csvoutput = fopen(csvfilename,"a+");
+
+            fprintf(csvoutput, "%i, %f, %f %s\n",iteration,apresults.mAP_weighted,apresults.mAP_unweighted, apPerClassBuff);
+
+            fclose(csvoutput);
 
             draw_precision = 1;
         }
@@ -1395,8 +1436,16 @@ struct average_precision_struct validate_detector_map(char *datacfg, char *cfgfi
         //printf("Precision = %1.2f, Recall = %1.2f, avg IOU = %2.2f%% \n\n", class_precision, class_recall, avg_iou_per_class[i]);
 
         // Modify mAP so that it is weighted by the number of objects per class, rather than just assuming all classes are equal
-        // mean_average_precision += avg_precision;
+        mean_average_precision_unweighted += avg_precision;
         mean_average_precision += avg_precision * truth_classes_count[i];
+    }
+
+    // Ensure any unused classes = 0 (rather than using their default values)
+    if (classes < 90){
+        int counter2;
+        for (counter2=classes;counter2<=90;++counter2){
+            apstruct.AP_perclass[counter2] = 0;
+        }
     }
 
     const float cur_precision = (float)tp_for_thresh / ((float)tp_for_thresh + (float)fp_for_thresh);
@@ -1408,7 +1457,7 @@ struct average_precision_struct validate_detector_map(char *datacfg, char *cfgfi
     printf(" for conf_thresh = %0.2f, TP = %d, FP = %d, FN = %d, average IoU = %2.2f %% \n",
         thresh_calc_avg_iou, tp_for_thresh, fp_for_thresh, unique_truth_count - tp_for_thresh, avg_iou * 100);
 
-    mean_average_precision_unweighted = mean_average_precision / classes;
+    mean_average_precision_unweighted = mean_average_precision_unweighted / classes;
     // Modify mAP so that it is weighted by the number of objects per class, rather than just assuming all classes are equal
     mean_average_precision = mean_average_precision / unique_truth_count;
 
